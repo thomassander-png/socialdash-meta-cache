@@ -178,8 +178,10 @@ class MetaClient:
         Note: since/until parameters can be unreliable with the Graph API,
         so we fetch all recent posts and filter client-side.
         """
+        # Note: 'type' and 'shares' fields are deprecated in v3.3+
+        # Use 'attachments' to determine post type instead
         params = {
-            "fields": "id,created_time,message,permalink_url,type,shares"
+            "fields": "id,created_time,message,permalink_url,attachments{type,media_type}"
         }
         
         # Calculate date boundaries

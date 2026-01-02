@@ -187,11 +187,18 @@ class PostCacher:
             else:
                 continue
             
+            # Determine post type from attachments (since 'type' field is deprecated)
+            post_type = None
+            attachments = post.get("attachments", {}).get("data", [])
+            if attachments:
+                first_att = attachments[0]
+                post_type = first_att.get("media_type") or first_att.get("type")
+            
             post_data = {
                 "post_id": post["id"],
                 "page_id": page_id,
                 "created_time": created_time,
-                "type": post.get("type"),
+                "type": post_type,
                 "permalink": post.get("permalink_url"),
                 "message": post.get("message", "")[:5000] if post.get("message") else None,
             }

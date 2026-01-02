@@ -5,6 +5,7 @@ Handles all PostgreSQL operations.
 
 import json
 import logging
+import os
 from contextlib import contextmanager
 from datetime import datetime, date
 from typing import Any, Dict, Generator, List, Optional
@@ -15,6 +16,20 @@ from psycopg2.extras import RealDictCursor, execute_values
 from .config import Config
 
 logger = logging.getLogger(__name__)
+
+
+def get_connection():
+    """Get a database connection from environment variable."""
+    database_url = os.environ.get("DATABASE_URL")
+    if not database_url:
+        logger.error("DATABASE_URL not set")
+        return None
+    
+    try:
+        return psycopg2.connect(database_url)
+    except Exception as e:
+        logger.error(f"Failed to connect to database: {e}")
+        return None
 
 
 class Database:
@@ -50,8 +65,6 @@ class Database:
     
     def run_migrations(self, migrations_dir: str = "migrations") -> None:
         """Run SQL migration files in order."""
-        import os
-        
         migration_files = sorted([
             f for f in os.listdir(migrations_dir)
             if f.endswith(".sql")
@@ -96,23 +109,33 @@ class Database:
         created_time: datetime,
         post_type: Optional[str] = None,
         permalink: Optional[str] = None,
-        message: Optional[str] = None
+        message: Optional[str] = None,
+        media_url: Optional[str] = None,
+        thumbnail_url: Optional[str] = None,
+        og_image_url: Optional[str] = None,
+        preview_source: Optional[str] = None
     ) -> None:
         """Insert or update a Facebook post."""
         with self.get_cursor() as cursor:
             cursor.execute("""
-                INSERT INTO fb_posts (post_id, page_id, created_time, type, permalink, message)
-                VALUES (%s, %s, %s, %s, %s, %s)
+                INSERT INTO fb_posts (post_id, page_id, created_time, type, permalink, message,
+                                      media_url, thumbnail_url, og_image_url, preview_source)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (post_id) DO UPDATE SET
                     type = COALESCE(EXCLUDED.type, fb_posts.type),
                     permalink = COALESCE(EXCLUDED.permalink, fb_posts.permalink),
-                    message = COALESCE(EXCLUDED.message, fb_posts.message)
-            """, (post_id, page_id, created_time, post_type, permalink, message))
+                    message = COALESCE(EXCLUDED.message, fb_posts.message),
+                    media_url = COALESCE(EXCLUDED.media_url, fb_posts.media_url),
+                    thumbnail_url = COALESCE(EXCLUDED.thumbnail_url, fb_posts.thumbnail_url),
+                    og_image_url = COALESCE(EXCLUDED.og_image_url, fb_posts.og_image_url),
+                    preview_source = COALESCE(EXCLUDED.preview_source, fb_posts.preview_source)
+            """, (post_id, page_id, created_time, post_type, permalink, message,
+                  media_url, thumbnail_url, og_image_url, preview_source))
         
         logger.debug(f"Upserted post: {post_id}")
     
     def upsert_posts_batch(self, posts: List[Dict[str, Any]]) -> int:
-        """Batch upsert multiple posts."""
+        """Batch upsert multiple posts with media URL support."""
         if not posts:
             return 0
         
@@ -124,7 +147,11 @@ class Database:
                     p["created_time"],
                     p.get("type"),
                     p.get("permalink"),
-                    p.get("message")
+                    p.get("message"),
+                    p.get("media_url"),
+                    p.get("thumbnail_url"),
+                    p.get("og_image_url"),
+                    p.get("preview_source")
                 )
                 for p in posts
             ]
@@ -132,12 +159,17 @@ class Database:
             execute_values(
                 cursor,
                 """
-                INSERT INTO fb_posts (post_id, page_id, created_time, type, permalink, message)
+                INSERT INTO fb_posts (post_id, page_id, created_time, type, permalink, message,
+                                      media_url, thumbnail_url, og_image_url, preview_source)
                 VALUES %s
                 ON CONFLICT (post_id) DO UPDATE SET
                     type = COALESCE(EXCLUDED.type, fb_posts.type),
                     permalink = COALESCE(EXCLUDED.permalink, fb_posts.permalink),
-                    message = COALESCE(EXCLUDED.message, fb_posts.message)
+                    message = COALESCE(EXCLUDED.message, fb_posts.message),
+                    media_url = COALESCE(EXCLUDED.media_url, fb_posts.media_url),
+                    thumbnail_url = COALESCE(EXCLUDED.thumbnail_url, fb_posts.thumbnail_url),
+                    og_image_url = COALESCE(EXCLUDED.og_image_url, fb_posts.og_image_url),
+                    preview_source = COALESCE(EXCLUDED.preview_source, fb_posts.preview_source)
                 """,
                 values
             )

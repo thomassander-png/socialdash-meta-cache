@@ -1,16 +1,121 @@
 """
 Module for caching Facebook posts from the Meta Graph API.
+Includes media URL extraction for thumbnail caching.
 """
 
 import logging
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 
+import requests
+from bs4 import BeautifulSoup
+
 from .config import Config
 from .db import Database
 from .meta_client import MetaClient, MetaAPIError
 
 logger = logging.getLogger(__name__)
+
+
+class ThumbnailFetcher:
+    """Handles fetching thumbnails from various sources."""
+    
+    def __init__(self, client: MetaClient):
+        self.client = client
+        self.stats = {
+            "graph_api": 0,
+            "open_graph": 0,
+            "none": 0
+        }
+    
+    def get_post_media_urls(self, post_id: str, permalink: Optional[str]) -> Dict[str, Optional[str]]:
+        """
+        Get media URLs for a post from various sources.
+        
+        Priority:
+        1. Graph API attachments
+        2. OpenGraph meta tags from permalink
+        3. None
+        
+        Returns:
+            Dict with media_url, thumbnail_url, og_image_url, preview_source
+        """
+        result = {
+            "media_url": None,
+            "thumbnail_url": None,
+            "og_image_url": None,
+            "preview_source": "none"
+        }
+        
+        # Try Graph API first
+        try:
+            attachments = self.client.get(
+                f"/{post_id}",
+                fields="attachments{media{image{src}},subattachments{media{image{src}}}}"
+            )
+            
+            if attachments and "attachments" in attachments:
+                att_data = attachments["attachments"].get("data", [])
+                if att_data:
+                    first_att = att_data[0]
+                    
+                    # Try main media
+                    media = first_att.get("media", {})
+                    image = media.get("image", {})
+                    if image.get("src"):
+                        result["media_url"] = image["src"]
+                        result["thumbnail_url"] = image["src"]
+                        result["preview_source"] = "graph_api"
+                        self.stats["graph_api"] += 1
+                        return result
+                    
+                    # Try subattachments (for albums)
+                    subatts = first_att.get("subattachments", {}).get("data", [])
+                    if subatts:
+                        first_sub = subatts[0]
+                        sub_media = first_sub.get("media", {})
+                        sub_image = sub_media.get("image", {})
+                        if sub_image.get("src"):
+                            result["media_url"] = sub_image["src"]
+                            result["thumbnail_url"] = sub_image["src"]
+                            result["preview_source"] = "graph_api"
+                            self.stats["graph_api"] += 1
+                            return result
+        except Exception as e:
+            logger.debug(f"Could not get attachments for {post_id}: {e}")
+        
+        # Fallback to OpenGraph
+        if permalink:
+            og_image = self._get_og_image(permalink)
+            if og_image:
+                result["og_image_url"] = og_image
+                result["thumbnail_url"] = og_image
+                result["preview_source"] = "open_graph"
+                self.stats["open_graph"] += 1
+                return result
+        
+        self.stats["none"] += 1
+        return result
+    
+    def _get_og_image(self, url: str) -> Optional[str]:
+        """Extract og:image from a URL."""
+        try:
+            response = requests.get(
+                url,
+                timeout=10,
+                headers={"User-Agent": "Mozilla/5.0 (compatible; SocialDash/1.0)"},
+                allow_redirects=True
+            )
+            response.raise_for_status()
+            
+            soup = BeautifulSoup(response.text, 'html.parser')
+            og_image = soup.find('meta', property='og:image')
+            if og_image and og_image.get('content'):
+                return og_image['content']
+        except Exception as e:
+            logger.debug(f"Could not get OG image from {url}: {e}")
+        
+        return None
 
 
 class PostCacher:
@@ -20,12 +125,14 @@ class PostCacher:
         self.config = config
         self.db = db
         self.client = client
+        self.thumbnail_fetcher = ThumbnailFetcher(client)
     
     def cache_page_posts(
         self,
         page_id: str,
         since: Optional[datetime] = None,
-        until: Optional[datetime] = None
+        until: Optional[datetime] = None,
+        fetch_thumbnails: bool = True
     ) -> Dict[str, int]:
         """
         Cache posts from a single page.
@@ -80,30 +187,43 @@ class PostCacher:
             else:
                 continue
             
-            db_posts.append({
+            post_data = {
                 "post_id": post["id"],
                 "page_id": page_id,
                 "created_time": created_time,
                 "type": post.get("type"),
                 "permalink": post.get("permalink_url"),
                 "message": post.get("message", "")[:5000] if post.get("message") else None,
-            })
+            }
+            
+            # Fetch thumbnails if enabled
+            if fetch_thumbnails:
+                media_urls = self.thumbnail_fetcher.get_post_media_urls(
+                    post["id"],
+                    post.get("permalink_url")
+                )
+                post_data.update(media_urls)
+            
+            db_posts.append(post_data)
         
         # Batch upsert to database
         upserted = self.db.upsert_posts_batch(db_posts)
         
         logger.info(f"Cached {upserted} posts for page {page_id}")
+        logger.info(f"Thumbnail stats: {self.thumbnail_fetcher.stats}")
         
         return {
             "fetched": len(posts),
             "upserted": upserted,
-            "posts": db_posts  # Return for metrics caching
+            "posts": db_posts,  # Return for metrics caching
+            "thumbnail_stats": self.thumbnail_fetcher.stats
         }
     
     def cache_all_pages(
         self,
         since: Optional[datetime] = None,
-        until: Optional[datetime] = None
+        until: Optional[datetime] = None,
+        fetch_thumbnails: bool = True
     ) -> Dict[str, Dict[str, int]]:
         """
         Cache posts from all configured pages.
@@ -122,7 +242,8 @@ class PostCacher:
                 result = self.cache_page_posts(
                     page_id=page_id,
                     since=since,
-                    until=until
+                    until=until,
+                    fetch_thumbnails=fetch_thumbnails
                 )
                 results[page_id] = result
                 total_fetched += result["fetched"]
@@ -140,7 +261,8 @@ class PostCacher:
 def run_cache_posts(
     config: Config,
     since: Optional[datetime] = None,
-    until: Optional[datetime] = None
+    until: Optional[datetime] = None,
+    fetch_thumbnails: bool = True
 ) -> Dict[str, Dict[str, int]]:
     """
     Main entry point for caching posts.
@@ -149,4 +271,4 @@ def run_cache_posts(
     client = MetaClient(config)
     cacher = PostCacher(config, db, client)
     
-    return cacher.cache_all_pages(since=since, until=until)
+    return cacher.cache_all_pages(since=since, until=until, fetch_thumbnails=fetch_thumbnails)

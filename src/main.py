@@ -3,9 +3,12 @@ Main CLI entry point for SocialDash Meta Cache.
 
 Usage:
     python -m src.main --mode cache
+    python -m src.main --mode cache_ig
+    python -m src.main --mode cache_all
     python -m src.main --mode backfill --start 2025-12-01 --end 2025-12-31
     python -m src.main --mode finalize_month --month 2025-12-01
     python -m src.main --mode migrate
+    python -m src.main --mode report --client "ClientName" --month 2025-12
 """
 
 import argparse
@@ -44,9 +47,9 @@ def parse_date(date_str: str) -> datetime:
 
 
 def run_cache(config: Config, since: Optional[datetime] = None, until: Optional[datetime] = None):
-    """Run the cache operation (posts + metrics)."""
+    """Run the cache operation (posts + metrics) for Facebook."""
     logger.info("=" * 60)
-    logger.info("Starting cache operation")
+    logger.info("Starting Facebook cache operation")
     logger.info(f"Token: {config.get_masked_token()}")
     logger.info(f"Pages: {', '.join(config.fb_page_ids)}")
     logger.info(f"API Version: {config.meta_api_version}")
@@ -68,18 +71,78 @@ def run_cache(config: Config, since: Optional[datetime] = None, until: Optional[
     
     # Summary
     logger.info("=" * 60)
-    logger.info("CACHE OPERATION COMPLETE")
+    logger.info("FACEBOOK CACHE OPERATION COMPLETE")
     logger.info(f"Pages processed: {len(config.fb_page_ids)}")
     logger.info(f"Posts cached: {total_posts}")
     logger.info(f"Metrics snapshots: {total_success} success, {total_failed} failed")
     logger.info("=" * 60)
     
-    # Return summary for GitHub Actions
     return {
         "pages": len(config.fb_page_ids),
         "posts": total_posts,
         "metrics_success": total_success,
         "metrics_failed": total_failed
+    }
+
+
+def run_cache_instagram(config: Config, since: Optional[datetime] = None, until: Optional[datetime] = None):
+    """Run the cache operation for Instagram."""
+    from .cache_instagram import run_instagram_cache
+    
+    logger.info("=" * 60)
+    logger.info("Starting Instagram cache operation")
+    logger.info(f"Token: {config.get_masked_token()}")
+    logger.info(f"Accounts: {', '.join(config.ig_account_ids)}")
+    logger.info(f"API Version: {config.meta_api_version}")
+    logger.info("=" * 60)
+    
+    start_date = since.strftime("%Y-%m-%d") if since else None
+    end_date = until.strftime("%Y-%m-%d") if until else None
+    
+    result = run_instagram_cache(
+        days_back=config.lookback_days,
+        start_date=start_date,
+        end_date=end_date
+    )
+    
+    logger.info("=" * 60)
+    logger.info("INSTAGRAM CACHE OPERATION COMPLETE")
+    logger.info(f"Accounts cached: {result.get('accounts_cached', 0)}")
+    logger.info(f"Posts cached: {result.get('posts_cached', 0)}")
+    logger.info(f"Metrics snapshots: {result.get('metrics_cached', 0)}")
+    logger.info("=" * 60)
+    
+    return result
+
+
+def run_cache_all(config: Config, since: Optional[datetime] = None, until: Optional[datetime] = None):
+    """Run cache operation for both Facebook and Instagram."""
+    logger.info("=" * 60)
+    logger.info("Starting FULL cache operation (Facebook + Instagram)")
+    logger.info("=" * 60)
+    
+    fb_result = {}
+    ig_result = {}
+    
+    # Facebook
+    if config.fb_page_ids:
+        fb_result = run_cache(config, since=since, until=until)
+    else:
+        logger.warning("No Facebook Page IDs configured, skipping Facebook")
+    
+    # Instagram
+    if config.ig_account_ids:
+        ig_result = run_cache_instagram(config, since=since, until=until)
+    else:
+        logger.warning("No Instagram Account IDs configured, skipping Instagram")
+    
+    logger.info("=" * 60)
+    logger.info("FULL CACHE OPERATION COMPLETE")
+    logger.info("=" * 60)
+    
+    return {
+        "facebook": fb_result,
+        "instagram": ig_result
     }
 
 
@@ -91,7 +154,7 @@ def run_backfill(config: Config, start: datetime, end: datetime):
     logger.info(f"Pages: {', '.join(config.fb_page_ids)}")
     logger.info("=" * 60)
     
-    return run_cache(config, since=start, until=end)
+    return run_cache_all(config, since=start, until=end)
 
 
 def run_finalize(config: Config, month_str: str):
@@ -125,14 +188,36 @@ def run_migrate(config: Config):
     logger.info("Migrations complete")
 
 
+def run_report(client_name: str, report_month: str, output_dir: str = "/tmp/reports"):
+    """Generate PPTX report."""
+    from .report_generator import generate_report
+    
+    logger.info("=" * 60)
+    logger.info(f"Generating report for {client_name} - {report_month}")
+    logger.info("=" * 60)
+    
+    report_path = generate_report(
+        client_name=client_name,
+        report_month=report_month,
+        output_dir=output_dir
+    )
+    
+    logger.info("=" * 60)
+    logger.info("REPORT GENERATION COMPLETE")
+    logger.info(f"Report saved to: {report_path}")
+    logger.info("=" * 60)
+    
+    return {"report_path": report_path}
+
+
 def main():
     parser = argparse.ArgumentParser(
-        description="SocialDash Meta Cache - Facebook data collector"
+        description="SocialDash Meta Cache - Facebook & Instagram data collector"
     )
     
     parser.add_argument(
         "--mode",
-        choices=["cache", "backfill", "finalize_month", "migrate"],
+        choices=["cache", "cache_ig", "cache_all", "backfill", "finalize_month", "migrate", "report"],
         required=True,
         help="Operation mode"
     )
@@ -152,7 +237,20 @@ def main():
     parser.add_argument(
         "--month",
         type=str,
-        help="Month to finalize (YYYY-MM or YYYY-MM-DD)"
+        help="Month to finalize or report (YYYY-MM or YYYY-MM-DD)"
+    )
+    
+    parser.add_argument(
+        "--client",
+        type=str,
+        help="Client name for report generation"
+    )
+    
+    parser.add_argument(
+        "--output",
+        type=str,
+        default="/tmp/reports",
+        help="Output directory for reports"
     )
     
     args = parser.parse_args()
@@ -165,7 +263,16 @@ def main():
     
     try:
         if args.mode == "cache":
+            config.validate(require_fb=True, require_ig=False)
             result = run_cache(config)
+            
+        elif args.mode == "cache_ig":
+            config.validate(require_fb=False, require_ig=True)
+            result = run_cache_instagram(config)
+            
+        elif args.mode == "cache_all":
+            config.validate(require_fb=False, require_ig=False)
+            result = run_cache_all(config)
             
         elif args.mode == "backfill":
             if not args.start or not args.end:
@@ -186,6 +293,13 @@ def main():
         elif args.mode == "migrate":
             run_migrate(config)
             result = {"status": "complete"}
+            
+        elif args.mode == "report":
+            if not args.client or not args.month:
+                logger.error("Report mode requires --client and --month parameters")
+                sys.exit(1)
+            
+            result = run_report(args.client, args.month, args.output)
         
         # Exit successfully
         sys.exit(0)

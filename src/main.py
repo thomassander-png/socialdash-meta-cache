@@ -10,6 +10,8 @@ Usage:
     python -m src.main --mode finalize_month --month 2025-12-01
     python -m src.main --mode migrate
     python -m src.main --mode report --client "ClientName" --month 2025-12
+    python -m src.main --mode generate_reports --month 2025-12
+    python -m src.main --mode generate_reports --month 2025-12 --customer-id UUID
 """
 
 import argparse
@@ -211,6 +213,112 @@ def run_report(client_name: str, report_month: str, output_dir: str = "/tmp/repo
     return {"report_path": report_path}
 
 
+def run_generate_reports(config: Config, month: str, customer_id: Optional[str] = None, output_dir: str = "reports", dry_run: bool = False):
+    """Generate reports for all active customers or a specific customer."""
+    from .report_generator import generate_report
+    import os
+    
+    logger.info("=" * 60)
+    logger.info(f"Generating reports for month: {month}")
+    if customer_id:
+        logger.info(f"Customer ID: {customer_id}")
+    else:
+        logger.info("Generating for ALL active customers")
+    if dry_run:
+        logger.info("DRY RUN - No reports will be generated")
+    logger.info("=" * 60)
+    
+    # Create output directory
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Get customers from database
+    db = Database(config)
+    conn = db.get_connection()
+    cursor = conn.cursor()
+    
+    try:
+        if customer_id:
+            cursor.execute("""
+                SELECT c.customer_id, c.name 
+                FROM customers c 
+                WHERE c.customer_id = %s AND c.is_active = true
+            """, (customer_id,))
+        else:
+            cursor.execute("""
+                SELECT c.customer_id, c.name 
+                FROM customers c 
+                WHERE c.is_active = true
+                ORDER BY c.name
+            """)
+        
+        customers = cursor.fetchall()
+        
+        if not customers:
+            logger.warning("No active customers found")
+            return {"generated": 0, "failed": 0, "reports": []}
+        
+        logger.info(f"Found {len(customers)} active customer(s)")
+        
+        generated = 0
+        failed = 0
+        reports = []
+        
+        for cust_id, cust_name in customers:
+            logger.info(f"Processing: {cust_name}")
+            
+            if dry_run:
+                logger.info(f"  [DRY RUN] Would generate report for {cust_name} - {month}")
+                reports.append({"customer": cust_name, "status": "dry_run"})
+                continue
+            
+            try:
+                # Generate the report
+                report_path = generate_report(
+                    client_name=cust_name,
+                    report_month=month,
+                    output_dir=output_dir
+                )
+                
+                # Update reports table
+                cursor.execute("""
+                    INSERT INTO reports (customer_id, month, status, generated_at)
+                    VALUES (%s, %s, 'generated', NOW())
+                    ON CONFLICT (customer_id, month) 
+                    DO UPDATE SET status = 'generated', generated_at = NOW(), updated_at = NOW()
+                """, (cust_id, f"{month}-01"))
+                conn.commit()
+                
+                generated += 1
+                reports.append({"customer": cust_name, "status": "generated", "path": report_path})
+                logger.info(f"  ✓ Report generated: {report_path}")
+                
+            except Exception as e:
+                failed += 1
+                reports.append({"customer": cust_name, "status": "failed", "error": str(e)})
+                logger.error(f"  ✗ Failed to generate report for {cust_name}: {e}")
+                
+                # Update reports table with error
+                cursor.execute("""
+                    INSERT INTO reports (customer_id, month, status, error_message)
+                    VALUES (%s, %s, 'failed', %s)
+                    ON CONFLICT (customer_id, month) 
+                    DO UPDATE SET status = 'failed', error_message = %s, updated_at = NOW()
+                """, (cust_id, f"{month}-01", str(e), str(e)))
+                conn.commit()
+        
+        logger.info("=" * 60)
+        logger.info("REPORT GENERATION COMPLETE")
+        logger.info(f"Generated: {generated}")
+        logger.info(f"Failed: {failed}")
+        logger.info("=" * 60)
+        
+        return {"generated": generated, "failed": failed, "reports": reports}
+        
+    finally:
+        cursor.close()
+        conn.close()
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="SocialDash Meta Cache - Facebook & Instagram data collector"
@@ -218,7 +326,7 @@ def main():
     
     parser.add_argument(
         "--mode",
-        choices=["cache", "cache_ig", "cache_all", "discover", "backfill", "finalize_month", "migrate", "report"],
+        choices=["cache", "cache_ig", "cache_all", "discover", "backfill", "finalize_month", "migrate", "report", "generate_reports"],
         required=True,
         help="Operation mode"
     )
@@ -252,6 +360,18 @@ def main():
         type=str,
         default="/tmp/reports",
         help="Output directory for reports"
+    )
+    
+    parser.add_argument(
+        "--customer-id",
+        type=str,
+        help="Customer ID (UUID) for report generation - leave empty for all customers"
+    )
+    
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Dry run - list reports to generate without generating"
     )
     
     args = parser.parse_args()
@@ -316,6 +436,19 @@ def main():
                 sys.exit(1)
             
             result = run_report(args.client, args.month, args.output)
+        
+        elif args.mode == "generate_reports":
+            if not args.month:
+                logger.error("generate_reports mode requires --month parameter")
+                sys.exit(1)
+            
+            result = run_generate_reports(
+                config,
+                args.month,
+                customer_id=getattr(args, 'customer_id', None),
+                output_dir=args.output,
+                dry_run=getattr(args, 'dry_run', False)
+            )
         
         # Exit successfully
         sys.exit(0)

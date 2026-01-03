@@ -1,0 +1,90 @@
+name: Generate Monthly Reports
+
+on:
+  # Run on the 3rd of each month at 6:00 AM UTC
+  schedule:
+    - cron: '0 6 3 * *'
+  
+  # Manual trigger with options
+  workflow_dispatch:
+    inputs:
+      month:
+        description: 'Report month (YYYY-MM format, e.g., 2025-02)'
+        required: false
+        type: string
+      customer_id:
+        description: 'Customer ID (UUID) - leave empty for all customers'
+        required: false
+        type: string
+      dry_run:
+        description: 'Dry run (do not generate, just list)'
+        required: false
+        type: boolean
+        default: false
+
+env:
+  DATABASE_URL: ${{ secrets.DATABASE_URL }}
+  TZ: ${{ secrets.TZ || 'Europe/Berlin' }}
+
+jobs:
+  generate-reports:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Calculate report month
+        id: calc-month
+        run: |
+          if [ -n "${{ github.event.inputs.month }}" ]; then
+            REPORT_MONTH="${{ github.event.inputs.month }}"
+          else
+            # Default to previous month
+            REPORT_MONTH=$(python -c "from datetime import datetime, timedelta; d = datetime.now().replace(day=1) - timedelta(days=1); print(d.strftime('%Y-%m'))")
+          fi
+          echo "month=$REPORT_MONTH" >> $GITHUB_OUTPUT
+          echo "Report month: $REPORT_MONTH"
+
+      - name: Generate reports
+        run: |
+          ARGS="--mode generate_reports --month ${{ steps.calc-month.outputs.month }}"
+          
+          if [ -n "${{ github.event.inputs.customer_id }}" ]; then
+            ARGS="$ARGS --customer-id ${{ github.event.inputs.customer_id }}"
+          fi
+          
+          if [ "${{ github.event.inputs.dry_run }}" == "true" ]; then
+            ARGS="$ARGS --dry-run"
+          fi
+          
+          python -m src.main $ARGS
+
+      - name: Upload generated reports
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: monthly-reports-${{ steps.calc-month.outputs.month }}
+          path: reports/*.pptx
+          retention-days: 30
+          if-no-files-found: ignore
+
+      - name: Summary
+        run: |
+          echo "## Report Generation Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Month:** ${{ steps.calc-month.outputs.month }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Dry Run:** ${{ github.event.inputs.dry_run || 'false' }}" >> $GITHUB_STEP_SUMMARY
+          if [ -d "reports" ]; then
+            echo "- **Generated Reports:** $(ls -1 reports/*.pptx 2>/dev/null | wc -l)" >> $GITHUB_STEP_SUMMARY
+          fi

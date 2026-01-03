@@ -397,7 +397,7 @@ def run_instagram_cache(
         Summary of caching results
     """
     config = Config()
-    client = MetaClient()
+    client = MetaClient(config)
     
     # Get Instagram account IDs from config
     ig_account_ids = config.get_ig_account_ids()

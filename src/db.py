@@ -376,3 +376,300 @@ class Database:
             cursor.execute("SELECT COUNT(*) as count FROM fb_posts")
             result = cursor.fetchone()
             return result["count"] if result else 0
+
+    
+    # ==================== Instagram Accounts ====================
+    
+    def upsert_ig_account(
+        self,
+        account_id: str,
+        username: str,
+        name: Optional[str] = None,
+        linked_fb_page_id: Optional[str] = None
+    ) -> None:
+        """Insert or update an Instagram Business Account."""
+        with self.get_cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO ig_accounts (account_id, username, name, linked_fb_page_id)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (account_id) DO UPDATE SET
+                    username = EXCLUDED.username,
+                    name = COALESCE(EXCLUDED.name, ig_accounts.name),
+                    linked_fb_page_id = COALESCE(EXCLUDED.linked_fb_page_id, ig_accounts.linked_fb_page_id)
+            """, (account_id, username, name, linked_fb_page_id))
+        
+        logger.debug(f"Upserted IG account: {account_id} (@{username})")
+    
+    def get_ig_accounts(self) -> List[Dict[str, Any]]:
+        """Get all tracked Instagram accounts."""
+        with self.get_cursor() as cursor:
+            cursor.execute("SELECT * FROM ig_accounts ORDER BY username")
+            return cursor.fetchall()
+    
+    # ==================== Customer Accounts ====================
+    
+    def upsert_customer_account(
+        self,
+        platform: str,
+        account_id: str,
+        account_name: Optional[str] = None,
+        customer_id: Optional[str] = None
+    ) -> None:
+        """Insert or update a customer account mapping."""
+        with self.get_cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO customer_accounts (platform, account_id, account_name, customer_id)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (platform, account_id) DO UPDATE SET
+                    account_name = COALESCE(EXCLUDED.account_name, customer_accounts.account_name),
+                    updated_at = NOW()
+            """, (platform, account_id, account_name, customer_id))
+        
+        logger.debug(f"Upserted customer_account: {platform}/{account_id}")
+    
+    def get_customer_accounts(
+        self,
+        customer_id: Optional[str] = None,
+        platform: Optional[str] = None,
+        unassigned_only: bool = False
+    ) -> List[Dict[str, Any]]:
+        """Get customer accounts with optional filters."""
+        with self.get_cursor() as cursor:
+            query = "SELECT * FROM customer_accounts WHERE 1=1"
+            params = []
+            
+            if customer_id:
+                query += " AND customer_id = %s"
+                params.append(customer_id)
+            
+            if platform:
+                query += " AND platform = %s"
+                params.append(platform)
+            
+            if unassigned_only:
+                query += " AND customer_id IS NULL"
+            
+            query += " ORDER BY platform, account_name"
+            
+            cursor.execute(query, params)
+            return cursor.fetchall()
+    
+    def assign_account_to_customer(
+        self,
+        account_id: str,
+        platform: str,
+        customer_id: Optional[str]
+    ) -> bool:
+        """Assign an account to a customer (or unassign if customer_id is None)."""
+        with self.get_cursor() as cursor:
+            cursor.execute("""
+                UPDATE customer_accounts
+                SET customer_id = %s, updated_at = NOW()
+                WHERE account_id = %s AND platform = %s
+                RETURNING id
+            """, (customer_id, account_id, platform))
+            
+            result = cursor.fetchone()
+            return result is not None
+    
+    # ==================== Customers ====================
+    
+    def create_customer(self, name: str) -> Optional[str]:
+        """Create a new customer and return the customer_id."""
+        with self.get_cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO customers (name)
+                VALUES (%s)
+                RETURNING customer_id
+            """, (name,))
+            
+            result = cursor.fetchone()
+            customer_id = str(result["customer_id"]) if result else None
+        
+        logger.info(f"Created customer: {name} ({customer_id})")
+        return customer_id
+    
+    def get_customers(self, active_only: bool = False) -> List[Dict[str, Any]]:
+        """Get all customers."""
+        with self.get_cursor() as cursor:
+            query = "SELECT * FROM view_customer_summary"
+            if active_only:
+                query += " WHERE is_active = true"
+            query += " ORDER BY name"
+            
+            cursor.execute(query)
+            return cursor.fetchall()
+    
+    def get_customer(self, customer_id: str) -> Optional[Dict[str, Any]]:
+        """Get a single customer by ID."""
+        with self.get_cursor() as cursor:
+            cursor.execute("""
+                SELECT * FROM view_customer_summary
+                WHERE customer_id = %s
+            """, (customer_id,))
+            return cursor.fetchone()
+    
+    def update_customer(
+        self,
+        customer_id: str,
+        name: Optional[str] = None,
+        is_active: Optional[bool] = None
+    ) -> bool:
+        """Update customer details."""
+        updates = []
+        params = []
+        
+        if name is not None:
+            updates.append("name = %s")
+            params.append(name)
+        
+        if is_active is not None:
+            updates.append("is_active = %s")
+            params.append(is_active)
+        
+        if not updates:
+            return False
+        
+        updates.append("updated_at = NOW()")
+        params.append(customer_id)
+        
+        with self.get_cursor() as cursor:
+            cursor.execute(f"""
+                UPDATE customers
+                SET {', '.join(updates)}
+                WHERE customer_id = %s
+                RETURNING customer_id
+            """, params)
+            
+            result = cursor.fetchone()
+            return result is not None
+    
+    def delete_customer(self, customer_id: str) -> bool:
+        """Delete a customer (only if no accounts assigned)."""
+        with self.get_cursor() as cursor:
+            # Check if any accounts are assigned
+            cursor.execute("""
+                SELECT COUNT(*) as count FROM customer_accounts
+                WHERE customer_id = %s
+            """, (customer_id,))
+            
+            result = cursor.fetchone()
+            if result and result["count"] > 0:
+                logger.warning(f"Cannot delete customer {customer_id}: has assigned accounts")
+                return False
+            
+            cursor.execute("""
+                DELETE FROM customers
+                WHERE customer_id = %s
+                RETURNING customer_id
+            """, (customer_id,))
+            
+            result = cursor.fetchone()
+            return result is not None
+    
+    # ==================== Reports ====================
+    
+    def create_report(
+        self,
+        customer_id: str,
+        month: date,
+        status: str = "pending"
+    ) -> Optional[str]:
+        """Create a new report entry."""
+        with self.get_cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO reports (customer_id, month, status)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (customer_id, month) DO UPDATE SET
+                    status = EXCLUDED.status,
+                    updated_at = NOW()
+                RETURNING report_id
+            """, (customer_id, month, status))
+            
+            result = cursor.fetchone()
+            return str(result["report_id"]) if result else None
+    
+    def update_report(
+        self,
+        report_id: str,
+        status: Optional[str] = None,
+        pptx_url: Optional[str] = None,
+        pdf_url: Optional[str] = None,
+        error_message: Optional[str] = None,
+        meta: Optional[Dict[str, Any]] = None
+    ) -> bool:
+        """Update report details."""
+        updates = ["updated_at = NOW()"]
+        params = []
+        
+        if status is not None:
+            updates.append("status = %s")
+            params.append(status)
+            if status == "generated":
+                updates.append("generated_at = NOW()")
+        
+        if pptx_url is not None:
+            updates.append("pptx_url = %s")
+            params.append(pptx_url)
+        
+        if pdf_url is not None:
+            updates.append("pdf_url = %s")
+            params.append(pdf_url)
+        
+        if error_message is not None:
+            updates.append("error_message = %s")
+            params.append(error_message)
+        
+        if meta is not None:
+            updates.append("meta = %s")
+            params.append(json.dumps(meta))
+        
+        params.append(report_id)
+        
+        with self.get_cursor() as cursor:
+            cursor.execute(f"""
+                UPDATE reports
+                SET {', '.join(updates)}
+                WHERE report_id = %s
+                RETURNING report_id
+            """, params)
+            
+            result = cursor.fetchone()
+            return result is not None
+    
+    def get_reports(
+        self,
+        customer_id: Optional[str] = None,
+        month: Optional[date] = None,
+        status: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """Get reports with optional filters."""
+        with self.get_cursor() as cursor:
+            query = "SELECT * FROM view_customer_reports WHERE 1=1"
+            params = []
+            
+            if customer_id:
+                query += " AND customer_id = %s"
+                params.append(customer_id)
+            
+            if month:
+                query += " AND month = %s"
+                params.append(month)
+            
+            if status:
+                query += " AND status = %s"
+                params.append(status)
+            
+            query += " ORDER BY month DESC, customer_name"
+            
+            cursor.execute(query, params)
+            return cursor.fetchall()
+    
+    def get_report(self, report_id: str) -> Optional[Dict[str, Any]]:
+        """Get a single report by ID."""
+        with self.get_cursor() as cursor:
+            cursor.execute("""
+                SELECT * FROM view_customer_reports
+                WHERE report_id = %s
+            """, (report_id,))
+            return cursor.fetchone()

@@ -5,6 +5,7 @@ Usage:
     python -m src.main --mode cache
     python -m src.main --mode cache_ig
     python -m src.main --mode cache_all
+    python -m src.main --mode discover
     python -m src.main --mode backfill --start 2025-12-01 --end 2025-12-31
     python -m src.main --mode finalize_month --month 2025-12-01
     python -m src.main --mode migrate
@@ -217,7 +218,7 @@ def main():
     
     parser.add_argument(
         "--mode",
-        choices=["cache", "cache_ig", "cache_all", "backfill", "finalize_month", "migrate", "report"],
+        choices=["cache", "cache_ig", "cache_all", "discover", "backfill", "finalize_month", "migrate", "report"],
         required=True,
         help="Operation mode"
     )
@@ -273,6 +274,21 @@ def main():
         elif args.mode == "cache_all":
             config.validate(require_fb=False, require_ig=False)
             result = run_cache_all(config)
+            
+        elif args.mode == "discover":
+            from .account_discovery import run_account_discovery
+            logger.info("=" * 60)
+            logger.info("Starting account discovery")
+            logger.info("=" * 60)
+            result = run_account_discovery(config)
+            logger.info("=" * 60)
+            logger.info("ACCOUNT DISCOVERY COMPLETE")
+            logger.info(f"FB Pages: {len(result.get('fb_pages', []))}")
+            logger.info(f"IG Accounts: {len(result.get('ig_accounts', []))}")
+            logger.info(f"Customer accounts created: {result.get('customer_accounts_created', 0)}")
+            if result.get('errors'):
+                logger.warning(f"Errors: {result['errors']}")
+            logger.info("=" * 60)
             
         elif args.mode == "backfill":
             if not args.start or not args.end:

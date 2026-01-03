@@ -278,6 +278,60 @@ class MetaClient:
         except MetaAPIError:
             return 0
     
+    def get(self, endpoint: str, fields: str = None, **kwargs) -> Dict[str, Any]:
+        """
+        Simple GET request to the Graph API.
+        
+        Args:
+            endpoint: API endpoint (e.g., '/12345' or '12345')
+            fields: Comma-separated list of fields to retrieve
+            **kwargs: Additional query parameters
+        
+        Returns:
+            API response as dictionary
+        """
+        # Clean endpoint - remove leading slash if present
+        endpoint = endpoint.lstrip('/')
+        
+        params = dict(kwargs)
+        if fields:
+            params['fields'] = fields
+        
+        try:
+            return self._make_request(endpoint, params)
+        except Exception as e:
+            logger.error(f"GET request failed for {endpoint}: {e}")
+            return {}
+    
+    def get_paginated(self, endpoint: str, fields: str = None, limit: int = 100, **kwargs) -> List[Dict[str, Any]]:
+        """
+        GET request with pagination - returns all results as a list.
+        
+        Args:
+            endpoint: API endpoint
+            fields: Comma-separated list of fields to retrieve
+            limit: Number of items per page
+            **kwargs: Additional query parameters
+        
+        Returns:
+            List of all items from paginated response
+        """
+        # Clean endpoint - remove leading slash if present
+        endpoint = endpoint.lstrip('/')
+        
+        params = dict(kwargs)
+        if fields:
+            params['fields'] = fields
+        
+        results = []
+        try:
+            for item in self._paginate(endpoint, params, limit):
+                results.append(item)
+        except Exception as e:
+            logger.error(f"Paginated GET request failed for {endpoint}: {e}")
+        
+        return results
+
     def get_post_full_metrics(self, post_id: str, post_data: Dict[str, Any]) -> Dict[str, Any]:
         """
         Get all available metrics for a post.

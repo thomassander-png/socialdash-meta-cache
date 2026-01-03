@@ -29,7 +29,7 @@ class Config:
     meta_app_secret: Optional[str] = None
     
     # Cache settings
-    lookback_days: int = 45
+    lookback_days: int = 365
     
     # Preview caching
     preview_cache_enabled: bool = False
@@ -44,7 +44,7 @@ class Config:
         self.timezone = os.environ.get("TZ", "Europe/Berlin")
         self.meta_app_id = os.environ.get("META_APP_ID")
         self.meta_app_secret = os.environ.get("META_APP_SECRET")
-        self.lookback_days = int(os.environ.get("LOOKBACK_DAYS", "45"))
+        self.lookback_days = int(os.environ.get("LOOKBACK_DAYS", "365"))
         
         # Parse Facebook Page IDs
         fb_page_ids_raw = os.environ.get("FB_PAGE_IDS", "")

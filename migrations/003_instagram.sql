@@ -8,6 +8,7 @@ CREATE TABLE IF NOT EXISTS ig_accounts (
     name TEXT,
     followers_count INTEGER,
     media_count INTEGER,
+    linked_fb_page_id TEXT,
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );

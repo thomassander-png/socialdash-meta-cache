@@ -107,7 +107,7 @@ class AccountDiscovery:
             # Handle pagination
             while "paging" in response and "next" in response["paging"]:
                 next_url = response["paging"]["next"]
-                response = self.client._request("GET", next_url)
+                response = self.client.request_url(next_url)
                 
                 for page_data in response.get("data", []):
                     page_id = page_data.get("id")

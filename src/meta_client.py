@@ -160,6 +160,69 @@ class MetaClient:
             else:
                 break
     
+    def get(self, endpoint: str, fields: Optional[str] = None, **kwargs) -> Dict[str, Any]:
+        """
+        Generic GET request to the Graph API.
+        
+        Args:
+            endpoint: API endpoint (e.g., '/me/accounts' or '/{page_id}')
+            fields: Comma-separated list of fields to request
+            **kwargs: Additional parameters to pass to the API
+            
+        Returns:
+            API response as dict
+        """
+        # Remove leading slash if present
+        endpoint = endpoint.lstrip('/')
+        
+        params = dict(kwargs)
+        if fields:
+            params['fields'] = fields
+            
+        return self._make_request(endpoint, params)
+    
+    def get_paginated(self, endpoint: str, fields: Optional[str] = None, **kwargs) -> List[Dict[str, Any]]:
+        """
+        GET request with automatic pagination.
+        Returns all results from all pages.
+        
+        Args:
+            endpoint: API endpoint
+            fields: Comma-separated list of fields to request
+            **kwargs: Additional parameters
+            
+        Returns:
+            List of all items from all pages
+        """
+        endpoint = endpoint.lstrip('/')
+        
+        params = dict(kwargs)
+        if fields:
+            params['fields'] = fields
+        
+        all_items = []
+        for item in self._paginate(endpoint, params):
+            all_items.append(item)
+        
+        return all_items
+    
+    def request_url(self, url: str) -> Dict[str, Any]:
+        """
+        Make a request to a full URL (for pagination next links).
+        
+        Args:
+            url: Full URL to request
+            
+        Returns:
+            API response as dict
+        """
+        try:
+            response = self.session.get(url, timeout=30)
+            response.raise_for_status()
+            return response.json()
+        except requests.exceptions.RequestException as e:
+            raise MetaAPIError(f"Request to {url} failed: {e}")
+
     def get_page_info(self, page_id: str) -> Dict[str, Any]:
         """Get basic page information."""
         params = {"fields": "id,name,fan_count,followers_count"}

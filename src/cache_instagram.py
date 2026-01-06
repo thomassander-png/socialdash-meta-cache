@@ -10,6 +10,7 @@ from typing import List, Dict, Any, Optional
 from .config import Config
 from .meta_client import MetaClient
 from .db import get_connection
+from .storage import get_storage_client, StorageClient
 
 logger = logging.getLogger(__name__)
 
@@ -81,7 +82,8 @@ def cache_instagram_media(
     account_ids: List[str],
     days_back: int = 45,
     start_date: Optional[datetime] = None,
-    end_date: Optional[datetime] = None
+    end_date: Optional[datetime] = None,
+    storage: StorageClient = None
 ) -> Dict[str, int]:
     """
     Cache Instagram media (posts, reels) for the specified accounts.
@@ -113,6 +115,7 @@ def cache_instagram_media(
     
     posts_cached = 0
     metrics_cached = 0
+    images_cached = 0
     cur = conn.cursor()
     
     for account_id in account_ids:
@@ -145,14 +148,32 @@ def cache_instagram_media(
                     continue
                 
                 # Upsert media
+                # Cache image to Supabase Storage for permanent URL
+                image_url = None
+                source_image_url = media.get('media_url') or media.get('thumbnail_url')
+                
+                if storage and source_image_url:
+                    try:
+                        image_url = storage.cache_post_image(
+                            image_url=source_image_url,
+                            platform="instagram",
+                            account_id=account_id,
+                            post_id=media_id
+                        )
+                        if image_url:
+                            images_cached += 1
+                    except Exception as e:
+                        logger.warning(f"Failed to cache image for media {media_id}: {e}")
+                
                 cur.execute("""
-                    INSERT INTO ig_posts (media_id, account_id, media_type, caption, permalink, timestamp, media_url, thumbnail_url)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    INSERT INTO ig_posts (media_id, account_id, media_type, caption, permalink, timestamp, media_url, thumbnail_url, image_url)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (media_id) DO UPDATE SET
                         caption = EXCLUDED.caption,
                         permalink = EXCLUDED.permalink,
                         media_url = EXCLUDED.media_url,
-                        thumbnail_url = EXCLUDED.thumbnail_url
+                        thumbnail_url = EXCLUDED.thumbnail_url,
+                        image_url = COALESCE(EXCLUDED.image_url, ig_posts.image_url)
                 """, (
                     media_id,
                     account_id,
@@ -161,7 +182,8 @@ def cache_instagram_media(
                     media.get('permalink'),
                     timestamp,
                     media.get('media_url'),
-                    media.get('thumbnail_url')
+                    media.get('thumbnail_url'),
+                    image_url
                 ))
                 
                 posts_cached += 1
@@ -180,8 +202,8 @@ def cache_instagram_media(
     cur.close()
     conn.close()
     
-    logger.info(f"Cached {posts_cached} posts, {metrics_cached} metric snapshots")
-    return {"posts_cached": posts_cached, "metrics_cached": metrics_cached}
+    logger.info(f"Cached {posts_cached} posts, {metrics_cached} metric snapshots, {images_cached} images")
+    return {"posts_cached": posts_cached, "metrics_cached": metrics_cached, "images_cached": images_cached}
 
 
 def cache_instagram_media_metrics(client: MetaClient, cur, media_id: str, media_type: str = None) -> bool:
@@ -398,6 +420,12 @@ def run_instagram_cache(
     """
     config = Config()
     client = MetaClient(config)
+    storage = get_storage_client(config)
+    
+    if storage:
+        logger.info("Supabase Storage enabled - images will be cached permanently")
+    else:
+        logger.info("Supabase Storage not configured - using temporary Meta URLs")
     
     # Get Instagram account IDs from config
     ig_account_ids = config.get_ig_account_ids()
@@ -430,11 +458,13 @@ def run_instagram_cache(
         ig_account_ids,
         days_back=days_back,
         start_date=start_dt,
-        end_date=end_dt
+        end_date=end_dt,
+        storage=storage
     )
     
     return {
         "accounts_cached": accounts_cached,
         "posts_cached": media_result.get("posts_cached", 0),
-        "metrics_cached": media_result.get("metrics_cached", 0)
+        "metrics_cached": media_result.get("metrics_cached", 0),
+        "images_cached": media_result.get("images_cached", 0)
     }

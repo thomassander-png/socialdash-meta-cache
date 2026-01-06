@@ -13,6 +13,7 @@ from bs4 import BeautifulSoup
 from .config import Config
 from .db import Database
 from .meta_client import MetaClient, MetaAPIError
+from .storage import get_storage_client, StorageClient
 
 logger = logging.getLogger(__name__)
 
@@ -121,11 +122,13 @@ class ThumbnailFetcher:
 class PostCacher:
     """Handles caching of Facebook posts."""
     
-    def __init__(self, config: Config, db: Database, client: MetaClient):
+    def __init__(self, config: Config, db: Database, client: MetaClient, storage: StorageClient = None):
         self.config = config
         self.db = db
         self.client = client
         self.thumbnail_fetcher = ThumbnailFetcher(client)
+        self.storage = storage
+        self.image_cache_stats = {"cached": 0, "failed": 0, "skipped": 0}
     
     def cache_page_posts(
         self,
@@ -210,6 +213,26 @@ class PostCacher:
                     post.get("permalink_url")
                 )
                 post_data.update(media_urls)
+                
+                # Cache image to Supabase Storage for permanent URL
+                if self.storage and media_urls.get("thumbnail_url"):
+                    try:
+                        permanent_url = self.storage.cache_post_image(
+                            image_url=media_urls["thumbnail_url"],
+                            platform="facebook",
+                            account_id=page_id,
+                            post_id=post["id"]
+                        )
+                        if permanent_url:
+                            post_data["image_url"] = permanent_url
+                            self.image_cache_stats["cached"] += 1
+                        else:
+                            self.image_cache_stats["failed"] += 1
+                    except Exception as e:
+                        logger.warning(f"Failed to cache image for post {post['id']}: {e}")
+                        self.image_cache_stats["failed"] += 1
+                else:
+                    self.image_cache_stats["skipped"] += 1
             
             db_posts.append(post_data)
         
@@ -218,12 +241,14 @@ class PostCacher:
         
         logger.info(f"Cached {upserted} posts for page {page_id}")
         logger.info(f"Thumbnail stats: {self.thumbnail_fetcher.stats}")
+        logger.info(f"Image cache stats: {self.image_cache_stats}")
         
         return {
             "fetched": len(posts),
             "upserted": upserted,
             "posts": db_posts,  # Return for metrics caching
-            "thumbnail_stats": self.thumbnail_fetcher.stats
+            "thumbnail_stats": self.thumbnail_fetcher.stats,
+            "image_cache_stats": self.image_cache_stats
         }
     
     def cache_all_pages(
@@ -276,6 +301,13 @@ def run_cache_posts(
     """
     db = Database(config)
     client = MetaClient(config)
-    cacher = PostCacher(config, db, client)
+    storage = get_storage_client(config)
+    
+    if storage:
+        logger.info("Supabase Storage enabled - images will be cached permanently")
+    else:
+        logger.info("Supabase Storage not configured - using temporary Meta URLs")
+    
+    cacher = PostCacher(config, db, client, storage)
     
     return cacher.cache_all_pages(since=since, until=until, fetch_thumbnails=fetch_thumbnails)

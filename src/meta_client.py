@@ -1,5 +1,6 @@
 """
 Meta/Facebook Graph API client with retry logic, pagination, and rate limit handling.
+Supports Page Access Tokens for Facebook Page API calls.
 """
 
 import logging
@@ -40,6 +41,10 @@ class MetaClient:
         self.api_version = config.meta_api_version
         self.access_token = config.meta_access_token
         self.session = self._create_session()
+        
+        # Page Access Tokens cache - maps page_id to page_access_token
+        self._page_tokens: Dict[str, str] = {}
+        self._page_tokens_loaded = False
     
     def _create_session(self) -> requests.Session:
         """Create a requests session with retry configuration."""
@@ -58,6 +63,61 @@ class MetaClient:
         
         return session
     
+    def _load_page_tokens(self):
+        """Load Page Access Tokens from /me/accounts endpoint."""
+        if self._page_tokens_loaded:
+            return
+        
+        logger.info("Loading Page Access Tokens...")
+        
+        try:
+            url = f"{self.BASE_URL}/{self.api_version}/me/accounts"
+            params = {
+                "access_token": self.access_token,
+                "fields": "id,name,access_token",
+                "limit": 100
+            }
+            
+            while True:
+                response = self.session.get(url, params=params, timeout=30)
+                response.raise_for_status()
+                data = response.json()
+                
+                for page in data.get("data", []):
+                    page_id = page.get("id")
+                    page_token = page.get("access_token")
+                    page_name = page.get("name", "Unknown")
+                    
+                    if page_id and page_token:
+                        self._page_tokens[page_id] = page_token
+                        logger.info(f"Loaded token for page: {page_name} ({page_id})")
+                
+                # Check for next page
+                paging = data.get("paging", {})
+                next_url = paging.get("next")
+                
+                if not next_url:
+                    break
+                
+                # Use next URL directly
+                url = next_url
+                params = {}  # Next URL already has params
+            
+            logger.info(f"Loaded {len(self._page_tokens)} Page Access Tokens")
+            self._page_tokens_loaded = True
+            
+        except Exception as e:
+            logger.error(f"Failed to load Page Access Tokens: {e}")
+            # Continue without page tokens - will use system user token as fallback
+            self._page_tokens_loaded = True
+    
+    def get_page_token(self, page_id: str) -> str:
+        """Get the Page Access Token for a specific page."""
+        if not self._page_tokens_loaded:
+            self._load_page_tokens()
+        
+        return self._page_tokens.get(page_id, self.access_token)
+    
     def _build_url(self, endpoint: str) -> str:
         """Build full API URL."""
         return f"{self.BASE_URL}/{self.api_version}/{endpoint}"
@@ -66,14 +126,26 @@ class MetaClient:
         self,
         endpoint: str,
         params: Optional[Dict[str, Any]] = None,
-        method: str = "GET"
+        method: str = "GET",
+        use_page_token: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Make an API request with exponential backoff for rate limits.
+        
+        Args:
+            endpoint: API endpoint
+            params: Query parameters
+            method: HTTP method
+            use_page_token: If provided, use the Page Access Token for this page_id
         """
         url = self._build_url(endpoint)
         params = params or {}
-        params["access_token"] = self.access_token
+        
+        # Use Page Access Token if specified, otherwise use system user token
+        if use_page_token:
+            params["access_token"] = self.get_page_token(use_page_token)
+        else:
+            params["access_token"] = self.access_token
         
         backoff = self.INITIAL_BACKOFF
         
@@ -128,7 +200,8 @@ class MetaClient:
         self,
         endpoint: str,
         params: Optional[Dict[str, Any]] = None,
-        limit: int = 100
+        limit: int = 100,
+        use_page_token: Optional[str] = None
     ) -> Generator[Dict[str, Any], None, None]:
         """
         Paginate through API results.
@@ -138,7 +211,7 @@ class MetaClient:
         params["limit"] = limit
         
         while True:
-            response = self._make_request(endpoint, params)
+            response = self._make_request(endpoint, params, use_page_token=use_page_token)
             
             data = response.get("data", [])
             for item in data:
@@ -160,13 +233,14 @@ class MetaClient:
             else:
                 break
     
-    def get(self, endpoint: str, fields: Optional[str] = None, **kwargs) -> Dict[str, Any]:
+    def get(self, endpoint: str, fields: Optional[str] = None, use_page_token: Optional[str] = None, **kwargs) -> Dict[str, Any]:
         """
         Generic GET request to the Graph API.
         
         Args:
             endpoint: API endpoint (e.g., '/me/accounts' or '/{page_id}')
             fields: Comma-separated list of fields to request
+            use_page_token: If provided, use the Page Access Token for this page_id
             **kwargs: Additional parameters to pass to the API
             
         Returns:
@@ -179,9 +253,9 @@ class MetaClient:
         if fields:
             params['fields'] = fields
             
-        return self._make_request(endpoint, params)
+        return self._make_request(endpoint, params, use_page_token=use_page_token)
     
-    def get_paginated(self, endpoint: str, fields: Optional[str] = None, **kwargs) -> List[Dict[str, Any]]:
+    def get_paginated(self, endpoint: str, fields: Optional[str] = None, use_page_token: Optional[str] = None, **kwargs) -> List[Dict[str, Any]]:
         """
         GET request with automatic pagination.
         Returns all results from all pages.
@@ -189,6 +263,7 @@ class MetaClient:
         Args:
             endpoint: API endpoint
             fields: Comma-separated list of fields to request
+            use_page_token: If provided, use the Page Access Token for this page_id
             **kwargs: Additional parameters
             
         Returns:
@@ -201,7 +276,7 @@ class MetaClient:
             params['fields'] = fields
         
         all_items = []
-        for item in self._paginate(endpoint, params):
+        for item in self._paginate(endpoint, params, use_page_token=use_page_token):
             all_items.append(item)
         
         return all_items
@@ -226,7 +301,7 @@ class MetaClient:
     def get_page_info(self, page_id: str) -> Dict[str, Any]:
         """Get basic page information."""
         params = {"fields": "id,name,fan_count,followers_count"}
-        return self._make_request(page_id, params)
+        return self._make_request(page_id, params, use_page_token=page_id)
     
     def get_page_posts(
         self,
@@ -237,10 +312,15 @@ class MetaClient:
     ) -> List[Dict[str, Any]]:
         """
         Get posts from a page.
+        Uses Page Access Token for the specific page.
         
         Note: since/until parameters can be unreliable with the Graph API,
         so we fetch all recent posts and filter client-side.
         """
+        # Ensure page tokens are loaded
+        if not self._page_tokens_loaded:
+            self._load_page_tokens()
+        
         # Note: 'type' and 'shares' fields are deprecated in v3.3+
         # Use 'attachments' to determine post type instead
         params = {
@@ -255,7 +335,8 @@ class MetaClient:
         
         posts = []
         
-        for post in self._paginate(f"{page_id}/posts", params):
+        # Use Page Access Token for this page
+        for post in self._paginate(f"{page_id}/feed", params, use_page_token=page_id):
             # Parse created_time
             created_time_str = post.get("created_time")
             if created_time_str:
@@ -273,9 +354,10 @@ class MetaClient:
         logger.info(f"Fetched {len(posts)} posts from page {page_id}")
         return posts
     
-    def get_post_insights(self, post_id: str) -> Dict[str, Any]:
+    def get_post_insights(self, post_id: str, page_id: Optional[str] = None) -> Dict[str, Any]:
         """
         Get insights/metrics for a specific post.
+        Uses Page Access Token if page_id is provided.
         
         Note: Not all metrics are available for all post types.
         Some metrics require page-level permissions.
@@ -293,8 +375,12 @@ class MetaClient:
             "metric": ",".join(metrics)
         }
         
+        # Extract page_id from post_id if not provided (format: page_id_post_id)
+        if page_id is None and "_" in post_id:
+            page_id = post_id.split("_")[0]
+        
         try:
-            response = self._make_request(f"{post_id}/insights", params)
+            response = self._make_request(f"{post_id}/insights", params, use_page_token=page_id)
             return self._parse_insights(response)
         except MetaAPIError as e:
             # Some posts may not have insights available
@@ -321,85 +407,44 @@ class MetaClient:
         
         return insights
     
-    def get_post_reactions_count(self, post_id: str) -> int:
+    def get_post_reactions_count(self, post_id: str, page_id: Optional[str] = None) -> int:
         """Get total reactions count for a post."""
         params = {"summary": "true"}
         
+        # Extract page_id from post_id if not provided
+        if page_id is None and "_" in post_id:
+            page_id = post_id.split("_")[0]
+        
         try:
-            response = self._make_request(f"{post_id}/reactions", params)
+            response = self._make_request(f"{post_id}/reactions", params, use_page_token=page_id)
             return response.get("summary", {}).get("total_count", 0)
         except MetaAPIError:
             return 0
     
-    def get_post_comments_count(self, post_id: str) -> int:
+    def get_post_comments_count(self, post_id: str, page_id: Optional[str] = None) -> int:
         """Get total comments count for a post."""
         params = {"summary": "true"}
         
+        # Extract page_id from post_id if not provided
+        if page_id is None and "_" in post_id:
+            page_id = post_id.split("_")[0]
+        
         try:
-            response = self._make_request(f"{post_id}/comments", params)
+            response = self._make_request(f"{post_id}/comments", params, use_page_token=page_id)
             return response.get("summary", {}).get("total_count", 0)
         except MetaAPIError:
             return 0
-    
-    def get(self, endpoint: str, fields: str = None, **kwargs) -> Dict[str, Any]:
-        """
-        Simple GET request to the Graph API.
-        
-        Args:
-            endpoint: API endpoint (e.g., '/12345' or '12345')
-            fields: Comma-separated list of fields to retrieve
-            **kwargs: Additional query parameters
-        
-        Returns:
-            API response as dictionary
-        """
-        # Clean endpoint - remove leading slash if present
-        endpoint = endpoint.lstrip('/')
-        
-        params = dict(kwargs)
-        if fields:
-            params['fields'] = fields
-        
-        try:
-            return self._make_request(endpoint, params)
-        except Exception as e:
-            logger.error(f"GET request failed for {endpoint}: {e}")
-            return {}
-    
-    def get_paginated(self, endpoint: str, fields: str = None, limit: int = 100, **kwargs) -> List[Dict[str, Any]]:
-        """
-        GET request with pagination - returns all results as a list.
-        
-        Args:
-            endpoint: API endpoint
-            fields: Comma-separated list of fields to retrieve
-            limit: Number of items per page
-            **kwargs: Additional query parameters
-        
-        Returns:
-            List of all items from paginated response
-        """
-        # Clean endpoint - remove leading slash if present
-        endpoint = endpoint.lstrip('/')
-        
-        params = dict(kwargs)
-        if fields:
-            params['fields'] = fields
-        
-        results = []
-        try:
-            for item in self._paginate(endpoint, params, limit):
-                results.append(item)
-        except Exception as e:
-            logger.error(f"Paginated GET request failed for {endpoint}: {e}")
-        
-        return results
 
-    def get_post_full_metrics(self, post_id: str, post_data: Dict[str, Any]) -> Dict[str, Any]:
+    def get_post_full_metrics(self, post_id: str, post_data: Dict[str, Any], page_id: Optional[str] = None) -> Dict[str, Any]:
         """
         Get all available metrics for a post.
         Combines edge counts with insights where available.
+        Uses Page Access Token if page_id is provided.
         """
+        # Extract page_id from post_id if not provided
+        if page_id is None and "_" in post_id:
+            page_id = post_id.split("_")[0]
+        
         metrics = {
             "reactions_total": 0,
             "comments_total": 0,
@@ -411,10 +456,10 @@ class MetaClient:
         }
         
         # Get reactions count
-        metrics["reactions_total"] = self.get_post_reactions_count(post_id)
+        metrics["reactions_total"] = self.get_post_reactions_count(post_id, page_id)
         
         # Get comments count
-        metrics["comments_total"] = self.get_post_comments_count(post_id)
+        metrics["comments_total"] = self.get_post_comments_count(post_id, page_id)
         
         # Get shares from post data if available
         shares_data = post_data.get("shares", {})
@@ -423,7 +468,7 @@ class MetaClient:
             metrics["shares_limited"] = False
         
         # Try to get insights (may not be available for all posts)
-        insights = self.get_post_insights(post_id)
+        insights = self.get_post_insights(post_id, page_id)
         
         if insights:
             # Override with insights data if available

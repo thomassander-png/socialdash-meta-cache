@@ -54,6 +54,11 @@ jobs:
           IG_ACCOUNT_IDS: ${{ secrets.IG_ACCOUNT_IDS }}
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           TZ: ${{ secrets.TZ }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+
         run: |
           MODE="${{ github.event.inputs.mode || 'cache_all' }}"
           

@@ -23,6 +23,7 @@ from typing import Optional
 from .config import get_config, Config
 from .cache_posts import run_cache_posts
 from .cache_metrics import run_cache_metrics
+from .cache_followers import run_cache_followers
 from .finalize_month import run_finalize_month, parse_month_string
 from .db import Database
 
@@ -326,7 +327,7 @@ def main():
     
     parser.add_argument(
         "--mode",
-        choices=["cache", "cache_ig", "cache_all", "discover", "backfill", "finalize_month", "migrate", "report", "generate_reports"],
+        choices=["cache", "cache_ig", "cache_all", "cache_followers", "discover", "backfill", "finalize_month", "migrate", "report", "generate_reports"],
         required=True,
         help="Operation mode"
     )
@@ -394,6 +395,17 @@ def main():
         elif args.mode == "cache_all":
             config.validate(require_fb=False, require_ig=False)
             result = run_cache_all(config)
+            
+        elif args.mode == "cache_followers":
+            logger.info("=" * 60)
+            logger.info("Starting follower count caching")
+            logger.info("=" * 60)
+            result = run_cache_followers(config)
+            logger.info("=" * 60)
+            logger.info("FOLLOWER CACHING COMPLETE")
+            logger.info(f"FB Pages: {len(result.get('facebook', {}))}")
+            logger.info(f"IG Accounts: {len(result.get('instagram', {}))}")
+            logger.info("=" * 60)
             
         elif args.mode == "discover":
             from .account_discovery import run_account_discovery

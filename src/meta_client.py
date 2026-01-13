@@ -354,38 +354,65 @@ class MetaClient:
         logger.info(f"Fetched {len(posts)} posts from page {page_id}")
         return posts
     
-    def get_post_insights(self, post_id: str, page_id: Optional[str] = None) -> Dict[str, Any]:
+    def get_post_insights(self, post_id: str, page_id: Optional[str] = None, is_video: bool = False) -> Dict[str, Any]:
         """
         Get insights/metrics for a specific post.
         Uses Page Access Token if page_id is provided.
         
+        Fetches metrics individually to handle cases where some metrics
+        are not available for certain post types.
+        
         Note: Not all metrics are available for all post types.
         Some metrics require page-level permissions.
         """
-        metrics = [
-            "post_impressions",
-            "post_impressions_unique",  # reach
-            "post_engaged_users",
-            "post_clicks",
-            "post_reactions_by_type_total",
-            "post_video_views",  # 3s views for videos
-        ]
-        
-        params = {
-            "metric": ",".join(metrics)
-        }
-        
         # Extract page_id from post_id if not provided (format: page_id_post_id)
         if page_id is None and "_" in post_id:
             page_id = post_id.split("_")[0]
         
+        insights = {}
+        
+        # Core metrics available for most posts
+        core_metrics = [
+            "post_impressions",
+            "post_impressions_unique",  # reach
+        ]
+        
+        # Video-specific metrics
+        video_metrics = [
+            "post_video_views",  # 3s views for videos
+        ]
+        
+        # Try core metrics first (one request)
         try:
+            params = {"metric": ",".join(core_metrics)}
             response = self._make_request(f"{post_id}/insights", params, use_page_token=page_id)
-            return self._parse_insights(response)
+            insights.update(self._parse_insights(response))
+            logger.debug(f"Got core insights for post {post_id}: impressions={insights.get('post_impressions')}, reach={insights.get('post_impressions_unique')}")
         except MetaAPIError as e:
-            # Some posts may not have insights available
-            logger.warning(f"Could not fetch insights for post {post_id}: {e}")
-            return {}
+            logger.debug(f"Core insights not available for post {post_id}: {e}")
+            # Try each metric individually as fallback
+            for metric in core_metrics:
+                try:
+                    params = {"metric": metric}
+                    response = self._make_request(f"{post_id}/insights", params, use_page_token=page_id)
+                    insights.update(self._parse_insights(response))
+                except MetaAPIError:
+                    pass
+        
+        # Try video metrics only for video posts
+        if is_video:
+            for metric in video_metrics:
+                try:
+                    params = {"metric": metric}
+                    response = self._make_request(f"{post_id}/insights", params, use_page_token=page_id)
+                    insights.update(self._parse_insights(response))
+                except MetaAPIError:
+                    pass
+        
+        if insights:
+            logger.info(f"Got insights for post {post_id}: reach={insights.get('post_impressions_unique')}, impressions={insights.get('post_impressions')}, video_views={insights.get('post_video_views')}")
+        
+        return insights
     
     def _parse_insights(self, response: Dict[str, Any]) -> Dict[str, Any]:
         """Parse insights response into a flat dictionary."""
@@ -467,8 +494,16 @@ class MetaClient:
             metrics["shares_total"] = shares_data.get("count")
             metrics["shares_limited"] = False
         
+        # Determine if this is a video post
+        post_type = post_data.get("type", "").lower()
+        attachments = post_data.get("attachments", {}).get("data", [])
+        is_video = post_type == "video" or any(
+            att.get("media_type") == "video" or att.get("type") == "video_inline"
+            for att in attachments
+        )
+        
         # Try to get insights (may not be available for all posts)
-        insights = self.get_post_insights(post_id, page_id)
+        insights = self.get_post_insights(post_id, page_id, is_video=is_video)
         
         if insights:
             # Override with insights data if available

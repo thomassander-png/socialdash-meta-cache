@@ -154,6 +154,7 @@ def cache_instagram_media(
                 
                 if storage and source_image_url:
                     try:
+                        logger.info(f"Attempting to cache image for media {media_id} from {source_image_url[:80]}...")
                         image_url = storage.cache_post_image(
                             image_url=source_image_url,
                             platform="instagram",
@@ -162,8 +163,15 @@ def cache_instagram_media(
                         )
                         if image_url:
                             images_cached += 1
+                            logger.info(f"Successfully cached image for media {media_id}")
+                        else:
+                            logger.warning(f"Failed to cache image for media {media_id} - returned None")
                     except Exception as e:
                         logger.warning(f"Failed to cache image for media {media_id}: {e}")
+                elif storage and not source_image_url:
+                    logger.warning(f"No source image URL for media {media_id}")
+                elif not storage:
+                    logger.debug(f"Storage not configured, skipping image cache for {media_id}")
                 
                 cur.execute("""
                     INSERT INTO ig_posts (media_id, account_id, media_type, caption, permalink, timestamp, media_url, thumbnail_url, image_url)

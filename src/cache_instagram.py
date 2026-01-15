@@ -254,7 +254,7 @@ def cache_instagram_media_metrics(client: MetaClient, cur, media_id: str, media_
             # Standard insights for images and carousels
             insights_data = client.get(
                 f"/{media_id}/insights",
-                metric="impressions,reach,saved,shares,profile_visits"
+                metric="reach,saved,shares,profile_visits"
             )
             
             if insights_data and 'data' in insights_data:

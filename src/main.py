@@ -327,7 +327,7 @@ def main():
     
     parser.add_argument(
         "--mode",
-        choices=["cache", "cache_ig", "cache_all", "cache_followers", "discover", "backfill", "finalize_month", "migrate", "report", "generate_reports"],
+        choices=["cache", "cache_ig", "cache_ig_insights", "cache_all", "cache_followers", "discover", "backfill", "finalize_month", "migrate", "report", "generate_reports"],
         required=True,
         help="Operation mode"
     )
@@ -391,6 +391,18 @@ def main():
         elif args.mode == "cache_ig":
             config.validate(require_fb=False, require_ig=True)
             result = run_cache_instagram(config)
+            
+        elif args.mode == "cache_ig_insights":
+            from .cache_ig_account_insights import run_ig_account_insights_cache
+            logger.info("=" * 60)
+            logger.info("Starting Instagram Account Insights caching")
+            logger.info("=" * 60)
+            result = run_ig_account_insights_cache(days_back=30)
+            logger.info("=" * 60)
+            logger.info("IG ACCOUNT INSIGHTS CACHING COMPLETE")
+            logger.info(f"Accounts processed: {result.get('accounts_processed', 0)}")
+            logger.info(f"Insights cached: {result.get('insights_cached', 0)}")
+            logger.info("=" * 60)
             
         elif args.mode == "cache_all":
             config.validate(require_fb=False, require_ig=False)

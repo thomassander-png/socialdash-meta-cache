@@ -6,19 +6,19 @@ on:
     inputs:
       mode:
         description: 'Mode: cache, cache_ig, cache_ig_insights, cache_all, cache_followers, discover, backfill, finalize_month'
-
         required: true
         default: 'cache_all'
+        type: choice
         options:
-  - cache
-  - cache_ig
-  - cache_ig_insights    # NEU
-  - cache_all
-  - cache_followers      # NEU
-  - discover
-  - backfill
-  - finalize_month
-
+          - cache
+          - cache_ig
+          - cache_ig_insights
+          - cache_all
+          - cache_followers
+          - discover
+          - backfill
+          - finalize_month
+      start_date:
         description: 'Start date for backfill (YYYY-MM-DD)'
         required: false
         type: string
@@ -74,20 +74,29 @@ jobs:
           elif [ "$MODE" = "cache_ig" ]; then
             echo "Caching Instagram data only..."
             python -m src.main --mode cache_ig
-         elif [ "$MODE" = "cache_ig_insights" ]; then
-  echo "Caching Instagram Account Insights..."
-  python -m src.main --mode cache_ig_insights
-elif [ "$MODE" = "cache_all" ]; then
-  echo "Caching Facebook + Instagram data..."
-  python -m src.main --mode cache_all
-  echo "Caching Instagram Account Insights..."
-  python -m src.main --mode cache_ig_insights
-  echo "Caching Follower counts..."
-  python -m src.main --mode cache_followers
-elif [ "$MODE" = "cache_followers" ]; then
-  echo "Caching Follower counts..."
-  python -m src.main --mode cache_followers
-
+          elif [ "$MODE" = "cache_ig_insights" ]; then
+            echo "Caching Instagram Account Insights..."
+            python -m src.main --mode cache_ig_insights
+          elif [ "$MODE" = "cache_all" ]; then
+            echo "Caching Facebook + Instagram data..."
+            python -m src.main --mode cache_all
+            echo "Caching Instagram Account Insights..."
+            python -m src.main --mode cache_ig_insights
+            echo "Caching Follower counts..."
+            python -m src.main --mode cache_followers
+          elif [ "$MODE" = "cache_followers" ]; then
+            echo "Caching Follower counts..."
+            python -m src.main --mode cache_followers
+          elif [ "$MODE" = "discover" ]; then
+            echo "Running account discovery..."
+            python -m src.main --mode discover
+          elif [ "$MODE" = "backfill" ]; then
+            echo "Running backfill from ${{ github.event.inputs.start_date }} to ${{ github.event.inputs.end_date }}..."
+            python -m src.main --mode backfill \
+              --start "${{ github.event.inputs.start_date }}" \
+              --end "${{ github.event.inputs.end_date }}"
+          elif [ "$MODE" = "finalize_month" ]; then
+            echo "Finalizing month ${{ github.event.inputs.month }}..."
             python -m src.main --mode finalize_month \
               --month "${{ github.event.inputs.month }}"
           fi

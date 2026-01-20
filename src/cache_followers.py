@@ -113,18 +113,18 @@ class FollowerCacher:
     ) -> bool:
         """Store a Facebook follower snapshot in the database."""
         try:
-            conn = self.db.get_connection()
-            cur = conn.cursor()
-            
-            cur.execute("""
-                INSERT INTO fb_follower_history (page_id, snapshot_date, followers_count)
-                VALUES (%s, %s, %s)
-                ON CONFLICT (page_id, snapshot_date) 
-                DO UPDATE SET followers_count = EXCLUDED.followers_count
-            """, (page_id, snapshot_date, followers_count))
-            
-            conn.commit()
-            cur.close()
+            # Use context manager correctly
+            with self.db.get_connection() as conn:
+                cur = conn.cursor()
+                
+                cur.execute("""
+                    INSERT INTO fb_follower_history (page_id, snapshot_date, followers_count)
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT (page_id, snapshot_date) 
+                    DO UPDATE SET followers_count = EXCLUDED.followers_count
+                """, (page_id, snapshot_date, followers_count))
+                
+                cur.close()
             return True
             
         except Exception as e:
@@ -139,18 +139,18 @@ class FollowerCacher:
     ) -> bool:
         """Store an Instagram follower snapshot in the database."""
         try:
-            conn = self.db.get_connection()
-            cur = conn.cursor()
-            
-            cur.execute("""
-                INSERT INTO ig_follower_history (account_id, snapshot_date, followers_count)
-                VALUES (%s, %s, %s)
-                ON CONFLICT (account_id, snapshot_date) 
-                DO UPDATE SET followers_count = EXCLUDED.followers_count
-            """, (account_id, snapshot_date, followers_count))
-            
-            conn.commit()
-            cur.close()
+            # Use context manager correctly
+            with self.db.get_connection() as conn:
+                cur = conn.cursor()
+                
+                cur.execute("""
+                    INSERT INTO ig_follower_history (account_id, snapshot_date, followers_count)
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT (account_id, snapshot_date) 
+                    DO UPDATE SET followers_count = EXCLUDED.followers_count
+                """, (account_id, snapshot_date, followers_count))
+                
+                cur.close()
             return True
             
         except Exception as e:
@@ -217,36 +217,36 @@ class FollowerCacher:
             Dict with current_followers, previous_followers, growth, growth_percentage
         """
         try:
-            conn = self.db.get_connection()
-            cur = conn.cursor()
-            
-            # Get current month's latest follower count
-            cur.execute("""
-                SELECT followers_count FROM fb_follower_history
-                WHERE page_id = %s
-                AND snapshot_date >= DATE_TRUNC('month', %s::date)
-                AND snapshot_date < DATE_TRUNC('month', %s::date) + INTERVAL '1 month'
-                ORDER BY snapshot_date DESC
-                LIMIT 1
-            """, (page_id, month, month))
-            
-            current_row = cur.fetchone()
-            current = current_row[0] if current_row else 0
-            
-            # Get previous month's latest follower count
-            cur.execute("""
-                SELECT followers_count FROM fb_follower_history
-                WHERE page_id = %s
-                AND snapshot_date >= DATE_TRUNC('month', %s::date) - INTERVAL '1 month'
-                AND snapshot_date < DATE_TRUNC('month', %s::date)
-                ORDER BY snapshot_date DESC
-                LIMIT 1
-            """, (page_id, month, month))
-            
-            previous_row = cur.fetchone()
-            previous = previous_row[0] if previous_row else 0
-            
-            cur.close()
+            with self.db.get_connection() as conn:
+                cur = conn.cursor()
+                
+                # Get current month's latest follower count
+                cur.execute("""
+                    SELECT followers_count FROM fb_follower_history
+                    WHERE page_id = %s
+                    AND snapshot_date >= DATE_TRUNC('month', %s::date)
+                    AND snapshot_date < DATE_TRUNC('month', %s::date) + INTERVAL '1 month'
+                    ORDER BY snapshot_date DESC
+                    LIMIT 1
+                """, (page_id, month, month))
+                
+                current_row = cur.fetchone()
+                current = current_row[0] if current_row else 0
+                
+                # Get previous month's latest follower count
+                cur.execute("""
+                    SELECT followers_count FROM fb_follower_history
+                    WHERE page_id = %s
+                    AND snapshot_date >= DATE_TRUNC('month', %s::date) - INTERVAL '1 month'
+                    AND snapshot_date < DATE_TRUNC('month', %s::date)
+                    ORDER BY snapshot_date DESC
+                    LIMIT 1
+                """, (page_id, month, month))
+                
+                previous_row = cur.fetchone()
+                previous = previous_row[0] if previous_row else 0
+                
+                cur.close()
             
             growth = current - previous
             growth_pct = round((growth / previous * 100), 2) if previous > 0 else 0
@@ -283,36 +283,36 @@ class FollowerCacher:
             Dict with current_followers, previous_followers, growth, growth_percentage
         """
         try:
-            conn = self.db.get_connection()
-            cur = conn.cursor()
-            
-            # Get current month's latest follower count
-            cur.execute("""
-                SELECT followers_count FROM ig_follower_history
-                WHERE account_id = %s
-                AND snapshot_date >= DATE_TRUNC('month', %s::date)
-                AND snapshot_date < DATE_TRUNC('month', %s::date) + INTERVAL '1 month'
-                ORDER BY snapshot_date DESC
-                LIMIT 1
-            """, (account_id, month, month))
-            
-            current_row = cur.fetchone()
-            current = current_row[0] if current_row else 0
-            
-            # Get previous month's latest follower count
-            cur.execute("""
-                SELECT followers_count FROM ig_follower_history
-                WHERE account_id = %s
-                AND snapshot_date >= DATE_TRUNC('month', %s::date) - INTERVAL '1 month'
-                AND snapshot_date < DATE_TRUNC('month', %s::date)
-                ORDER BY snapshot_date DESC
-                LIMIT 1
-            """, (account_id, month, month))
-            
-            previous_row = cur.fetchone()
-            previous = previous_row[0] if previous_row else 0
-            
-            cur.close()
+            with self.db.get_connection() as conn:
+                cur = conn.cursor()
+                
+                # Get current month's latest follower count
+                cur.execute("""
+                    SELECT followers_count FROM ig_follower_history
+                    WHERE account_id = %s
+                    AND snapshot_date >= DATE_TRUNC('month', %s::date)
+                    AND snapshot_date < DATE_TRUNC('month', %s::date) + INTERVAL '1 month'
+                    ORDER BY snapshot_date DESC
+                    LIMIT 1
+                """, (account_id, month, month))
+                
+                current_row = cur.fetchone()
+                current = current_row[0] if current_row else 0
+                
+                # Get previous month's latest follower count
+                cur.execute("""
+                    SELECT followers_count FROM ig_follower_history
+                    WHERE account_id = %s
+                    AND snapshot_date >= DATE_TRUNC('month', %s::date) - INTERVAL '1 month'
+                    AND snapshot_date < DATE_TRUNC('month', %s::date)
+                    ORDER BY snapshot_date DESC
+                    LIMIT 1
+                """, (account_id, month, month))
+                
+                previous_row = cur.fetchone()
+                previous = previous_row[0] if previous_row else 0
+                
+                cur.close()
             
             growth = current - previous
             growth_pct = round((growth / previous * 100), 2) if previous > 0 else 0

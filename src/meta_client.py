@@ -372,9 +372,17 @@ class MetaClient:
         insights = {}
         
         # Core metrics available for most posts
+        # Note: post_impressions was deprecated Nov 15, 2025 → replaced by post_media_view
+        # post_impressions_unique (reach) was also deprecated → use post_media_view_unique
         core_metrics = [
+            "post_media_view",
+            "post_media_view_unique",  # reach (replaces post_impressions_unique)
+        ]
+        
+        # Legacy metrics as fallback for older posts (before Nov 15, 2025)
+        legacy_core_metrics = [
             "post_impressions",
-            "post_impressions_unique",  # reach
+            "post_impressions_unique",
         ]
         
         # Video-specific metrics
@@ -382,16 +390,27 @@ class MetaClient:
             "post_video_views",  # 3s views for videos
         ]
         
-        # Try core metrics first (one request)
+        # Try new metrics first (post_media_view replaces post_impressions since Nov 2025)
         try:
             params = {"metric": ",".join(core_metrics)}
             response = self._make_request(f"{post_id}/insights", params, use_page_token=page_id)
             insights.update(self._parse_insights(response))
-            logger.debug(f"Got core insights for post {post_id}: impressions={insights.get('post_impressions')}, reach={insights.get('post_impressions_unique')}")
+            logger.info(f"Got new-style insights for post {post_id}: views={insights.get('post_media_view')}, reach={insights.get('post_media_view_unique')}")
         except MetaAPIError as e:
-            logger.debug(f"Core insights not available for post {post_id}: {e}")
-            # Try each metric individually as fallback
+            logger.debug(f"New metrics not available for post {post_id}: {e}")
+            # Try each new metric individually
             for metric in core_metrics:
+                try:
+                    params = {"metric": metric}
+                    response = self._make_request(f"{post_id}/insights", params, use_page_token=page_id)
+                    insights.update(self._parse_insights(response))
+                except MetaAPIError:
+                    pass
+        
+        # If new metrics didn't return data, try legacy metrics as fallback
+        if not insights.get('post_media_view') and not insights.get('post_impressions'):
+            logger.debug(f"Trying legacy metrics for post {post_id}")
+            for metric in legacy_core_metrics:
                 try:
                     params = {"metric": metric}
                     response = self._make_request(f"{post_id}/insights", params, use_page_token=page_id)
@@ -410,7 +429,12 @@ class MetaClient:
                     pass
         
         if insights:
-            logger.info(f"Got insights for post {post_id}: reach={insights.get('post_impressions_unique')}, impressions={insights.get('post_impressions')}, video_views={insights.get('post_video_views')}")
+            # Log with both old and new metric names
+            reach = insights.get('post_media_view_unique') or insights.get('post_impressions_unique')
+            impressions = insights.get('post_media_view') or insights.get('post_impressions')
+            logger.info(f"Got insights for post {post_id}: reach={reach}, impressions/views={impressions}, video_views={insights.get('post_video_views')}")
+        else:
+            logger.warning(f"No insights available for post {post_id}")
         
         return insights
     
@@ -510,8 +534,9 @@ class MetaClient:
             if "reactions_total" in insights:
                 metrics["reactions_total"] = insights["reactions_total"]
             
-            metrics["reach"] = insights.get("post_impressions_unique")
-            metrics["impressions"] = insights.get("post_impressions")
+            # Use new metrics (post_media_view) with fallback to legacy (post_impressions)
+            metrics["reach"] = insights.get("post_media_view_unique") or insights.get("post_impressions_unique")
+            metrics["impressions"] = insights.get("post_media_view") or insights.get("post_impressions")
             metrics["video_3s_views"] = insights.get("post_video_views")
         
         return metrics

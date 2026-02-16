@@ -252,9 +252,10 @@ def cache_instagram_media_metrics(client: MetaClient, cur, media_id: str, media_
         # Try to get all available metrics
         try:
             # Standard insights for images and carousels
+            # Note: 'impressions' was deprecated in v22.0+ and replaced by 'views'
             insights_data = client.get(
                 f"/{media_id}/insights",
-                metric="reach,saved,shares,profile_visits"
+                metric="reach,saved,shares,profile_visits,views"
             )
             
             if insights_data and 'data' in insights_data:
@@ -302,6 +303,10 @@ def cache_instagram_media_metrics(client: MetaClient, cur, media_id: str, media_
                 except Exception as e2:
                     logger.debug(f"Could not fetch video_views for {media_id}: {e2}")
         
+        # Use 'views' as impressions (views replaced impressions in v22.0+)
+        # Fall back to 'impressions' for older media created before July 2, 2024
+        impressions_value = insights.get('views') or insights.get('impressions')
+        
         # Insert metrics snapshot
         cur.execute("""
             INSERT INTO ig_post_metrics (
@@ -314,15 +319,16 @@ def cache_instagram_media_metrics(client: MetaClient, cur, media_id: str, media_
             comments,
             insights.get('saved'),
             insights.get('reach'),
-            insights.get('impressions'),
+            impressions_value,
             plays,
             insights.get('shares'),
             insights.get('profile_visits'),
             json.dumps(raw_data) if raw_data else None
         ))
         
-        logger.debug(f"Cached metrics for {media_id}: likes={likes}, comments={comments}, "
-                    f"reach={insights.get('reach')}, saves={insights.get('saved')}, plays={plays}")
+        logger.info(f"Cached metrics for {media_id}: likes={likes}, comments={comments}, "
+                    f"reach={insights.get('reach')}, impressions/views={impressions_value}, "
+                    f"saves={insights.get('saved')}, plays={plays}, shares={insights.get('shares')}")
         
         return True
         

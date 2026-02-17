@@ -418,6 +418,17 @@ class MetaClient:
                 except MetaAPIError:
                     pass
         
+        # If reach (post_media_view_unique) is still missing, try legacy reach separately
+        if not insights.get('post_media_view_unique') and not insights.get('post_impressions_unique'):
+            logger.debug(f"Trying legacy reach metric (post_impressions_unique) for post {post_id}")
+            try:
+                params = {"metric": "post_impressions_unique"}
+                response = self._make_request(f"{post_id}/insights", params, use_page_token=page_id)
+                insights.update(self._parse_insights(response))
+                logger.info(f"Got legacy reach for post {post_id}: {insights.get('post_impressions_unique')}")
+            except MetaAPIError as e:
+                logger.debug(f"Legacy reach metric also not available for post {post_id}: {e}")
+        
         # Try video metrics only for video posts
         if is_video:
             for metric in video_metrics:

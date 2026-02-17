@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: 'Mode: cache, cache_ig, cache_ig_insights, cache_all, cache_followers, discover, backfill, finalize_month'
+        description: 'Mode: cache, cache_ig, cache_ig_insights, cache_all, cache_followers, discover, backfill, finalize_month, migrate'
         required: true
         default: 'cache_all'
         type: choice
@@ -18,6 +18,7 @@ on:
           - discover
           - backfill
           - finalize_month
+          - migrate
       start_date:
         description: 'Start date for backfill (YYYY-MM-DD)'
         required: false
